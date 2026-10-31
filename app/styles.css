@@ -235,6 +235,7 @@ input[type=color] { width: 34px; height: 26px; border: 1px solid var(--line-2); 
   .thumb .rm { opacity: 1; }
   .ed-chips { left: 8px; bottom: 6px; }
   .phone-body { grid-template-columns: 1fr; }
+  .result-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .toast { bottom: 80px; }
   .row { grid-template-columns: 84px 1fr 48px; }
 }

@@ -1,6 +1,6 @@
 // Офлайн-кэш для онлайн-версии: после первого открытия Cropper работает без интернета.
 // Отдаём из кэша сразу и тихо обновляем его из сети (новая версия подхватится при следующем запуске).
-const CACHE = 'cropper-v2';
+const CACHE = 'cropper-v3';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'fonts/fonts.css'];
 
 self.addEventListener('install', (e) => {
