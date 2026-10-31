@@ -209,6 +209,19 @@ input[type=color] { width: 34px; height: 26px; border: 1px solid var(--line-2); 
 }
 
 .mtabs { display: none; }
+.icon-btn { padding-left: 9px; padding-right: 9px; }
+.proj-sel { font-weight: 600; max-width: 260px; }
+.tl-bar { align-items: center; }
+.tl-bar #slideCount { margin-left: 6px; }
+.modal-card.narrow { max-width: 520px; }
+.settings-body p { margin: 6px 0 10px; color: #c9c6c0; }
+.settings-body .url-box { margin-bottom: 8px; }
+.radio { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; border: 1px solid var(--line-2); border-radius: 9px; margin: 6px 0; cursor: pointer; font-size: 12px; line-height: 1.5; }
+.radio:has(input:checked) { border-color: var(--accent); background: rgba(255,138,61,.07); }
+.radio input { margin-top: 3px; accent-color: var(--accent); }
+.grow { flex: 1; }
+.thumb.missing img { opacity: .35; filter: grayscale(1); }
+.thumb.missing::after { content: 'нет файла'; position: absolute; left: 0; right: 0; bottom: 4px; text-align: center; font-size: 10px; color: #ff9b9b; }
 
 /* ---------- phone ---------- */
 @media (max-width: 860px) {

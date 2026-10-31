@@ -19,6 +19,95 @@ if (KEY) store.set('key', KEY); else KEY = store.get('key', null);
 const HAS_API = /^https?:$/.test(location.protocol) && !!KEY;
 const api = (p, opt) => fetch(p + (p.includes('?') ? '&' : '?') + 'k=' + encodeURIComponent(KEY), opt);
 
+// ---------- каталог: на ПК — папка на диске, в браузере/на телефоне — IndexedDB ----------
+const Catalog = NATIVE ? {
+  where: 'disk',
+  async load() { const r = await NATIVE.catalogLoad(); return { dir: r.dir, zoom: r.zoom, data: r.data ? JSON.parse(r.data) : null }; },
+  save: (json) => NATIVE.catalogSave(json),
+  saveSync: (json) => NATIVE.catalogSaveSync(json),
+  async put(file, id) {
+    const p = NATIVE.pathForFile(file);
+    if (p && S.importMode === 'link') return { path: p };
+    return { path: await NATIVE.catalogWrite(`${id}_${file.name}`, await file.arrayBuffer()), owned: true };
+  },
+  async get(src) { const buf = await NATIVE.readFile(src.path); return buf ? new Blob([buf]) : null; },
+  async remove(src) { if (src.owned) await NATIVE.trash(src.path); },
+} : (() => {
+  let dbp = null;
+  const db = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('cropper', 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore('kv'); r.result.createObjectStore('files'); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  }));
+  const tx = async (store, mode, fn) => {
+    const d = await db();
+    return new Promise((res, rej) => { const t = d.transaction(store, mode); const q = fn(t.objectStore(store)); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); });
+  };
+  return {
+    where: 'browser',
+    async load() { const s = await tx('kv', 'readonly', (o) => o.get('catalog')).catch(() => null); return { data: s ? JSON.parse(s) : null }; },
+    save: (json) => tx('kv', 'readwrite', (o) => o.put(json, 'catalog')),
+    saveSync(json) { this.save(json).catch(() => {}); },
+    async put(file, id) { await tx('files', 'readwrite', (o) => o.put(file, id)); return { idb: id }; },
+    get: (src) => tx('files', 'readonly', (o) => o.get(src.idb)),
+    remove: (src) => tx('files', 'readwrite', (o) => o.delete(src.idb)),
+  };
+})();
+
+function serialize() {
+  // Общие объекты кадра (обложка ↔ развороты) сохраняем как ссылки на таблицу кадров
+  const ids = new Map(), crops = [];
+  const ref = (c) => { if (!ids.has(c)) { ids.set(c, crops.length); crops.push({ cx: c.cx, cy: c.cy, z: c.z }); } return ids.get(c); };
+  const projects = S.projects.map((p) => ({
+    id: p.id, name: p.name, cur: p.id === S.project ? S.cur : p.cur,
+    blocks: p.blocks.map((b) => ({ ...b, cells: b.cells.map((c) => ({ img: c.img, crop: ref(c.crop) })) })),
+  }));
+  const images = S.order.map((id) => { const e = S.images.get(id); return { id, name: e.name, w: e.w, h: e.h, thumb: e.thumb, src: e.src || null }; });
+  return JSON.stringify({ v: 1, uid, images, projects, crops, project: S.project });
+}
+
+function restore(d) {
+  uid = Math.max(uid, d.uid || 1);
+  for (const m of d.images || []) {
+    S.images.set(m.id, { id: m.id, name: m.name, w: m.w, h: m.h, thumb: m.thumb, src: m.src });
+    S.order.push(m.id);
+  }
+  const crops = (d.crops || []).map((c) => ({ ...c }));
+  S.projects = (d.projects || []).map((p) => ({
+    id: p.id, name: p.name, cur: p.cur,
+    blocks: p.blocks.map((b) => ({ ...b, cells: b.cells.map((c) => ({ img: S.images.has(c.img) ? c.img : null, crop: crops[c.crop] || mkCrop() })) })),
+  }));
+  if (S.projects.length) switchProject(S.projects.some((p) => p.id === d.project) ? d.project : S.projects[0].id, true);
+}
+
+let saveTimer = 0, catalogReady = false;
+function scheduleSave() {
+  if (!catalogReady) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => Catalog.save(serialize()).catch((e) => toast('Не удалось сохранить каталог: ' + e.message)), 400);
+}
+function saveNow() { if (catalogReady) { clearTimeout(saveTimer); Catalog.saveSync(serialize()); } }
+
+// ---------- карусели (проекты) ----------
+function newProject(name) {
+  const p = { id: uid++, name: name || `Карусель ${S.projects.length + 1}`, blocks: [], cur: null };
+  S.projects.push(p);
+  return p;
+}
+function switchProject(id, silent) {
+  const old = S.projects.find((p) => p.id === S.project);
+  if (old) old.cur = S.cur;
+  const p = S.projects.find((x) => x.id === id) || S.projects[0];
+  S.project = p.id; S.blocks = p.blocks; S.cur = p.cur ?? (p.blocks[0] && p.blocks[0].id) ?? null; S.cell = 0;
+  usedImages(p.blocks).forEach((e) => ensureLoaded(e).then(() => { queueEditor(); dirty(); }));
+  if (!silent) refreshAll();
+}
+function renderProjects() {
+  $('#projSel').innerHTML = S.projects.map((p) => `<option value="${p.id}" ${p.id === S.project ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  $('#projDel').disabled = false;
+}
+
 // ---------- константы ----------
 const FRAMES = { '4:5': [4, 5], '3:4': [3, 4], '1:1': [1, 1] };
 const WIDTHS = [1080, 1440, 1600, 2160];
@@ -29,7 +118,9 @@ const MAX_SLIDES = 20;
 let uid = 1;
 const S = {
   images: new Map(), order: [], sel: [],
+  projects: [], project: null, // несколько каруселей; S.blocks — блоки текущей
   blocks: [], cur: null, cell: 0,
+  importMode: store.get('importMode', 'copy'),
   frame: store.get('frame', '4:5'), width: store.get('width', 1440), quality: store.get('quality', 92),
   prefix: store.get('prefix', 'carousel'),
   overlay: store.get('overlay', { grid: false, thirds: false }),
@@ -113,24 +204,49 @@ function getLevel(e, s) {
   }
 }
 
+// onload, а не img.decode(): decode() может не завершиться в свёрнутом/скрытом окне
+function loadImg(blob) {
+  const url = URL.createObjectURL(blob), img = new Image();
+  return new Promise((res) => {
+    img.onload = () => res(img.naturalWidth ? img : null);
+    img.onerror = () => { URL.revokeObjectURL(url); res(null); };
+    img.src = url;
+  });
+}
+
 async function addImageFile(file) {
   if (!/^image\//.test(file.type) && !/\.(jpe?g|png|webp|avif|gif|bmp)$/i.test(file.name)) return null;
-  const url = URL.createObjectURL(file);
-  const img = new Image();
-  // onload, а не img.decode(): decode() может не завершиться в свёрнутом/скрытом окне
-  const ok = await new Promise((res) => { img.onload = () => res(true); img.onerror = () => res(false); img.src = url; });
-  if (!ok || !img.naturalWidth) { URL.revokeObjectURL(url); toast(`Не удалось открыть ${file.name}`); return null; }
+  const img = await loadImg(file);
+  if (!img) { toast(`Не удалось открыть ${file.name}`); return null; }
   const e = { id: uid++, name: file.name, file, w: img.naturalWidth, h: img.naturalHeight };
   e.levels = [{ src: img, w: e.w, h: e.h, f: 1 }];
-  const s = 300 / Math.max(e.w, e.h);
+  const s = 240 / Math.max(e.w, e.h);
   const tw = Math.max(1, Math.round(e.w * s)), th = Math.max(1, Math.round(e.h * s));
   const tc = makeCanvas(tw, th);
   tc.getContext('2d').drawImage(getLevel(e, s).src, 0, 0, tw, th);
-  e.thumb = tc.toDataURL('image/jpeg', 0.82);
+  e.thumb = tc.toDataURL('image/jpeg', 0.8);
+  try { e.src = await Catalog.put(file, e.id); } catch (err) { toast(`Не удалось сохранить ${file.name} в каталог: ${err.message}`); }
   S.images.set(e.id, e);
   S.order.push(e.id);
   return e.id;
 }
+
+// Фото из каталога грузятся лениво — при первом показе в карусели
+function ensureLoaded(e) {
+  if (e.levels || e.missing) return Promise.resolve(e);
+  if (!e.loading) {
+    e.loading = (async () => {
+      const blob = e.src ? await Catalog.get(e.src).catch(() => null) : null;
+      const img = blob && (await loadImg(blob));
+      if (img) { e.levels = [{ src: img, w: img.naturalWidth, h: img.naturalHeight, f: 1 }]; e.w = img.naturalWidth; e.h = img.naturalHeight; }
+      else e.missing = true;
+      e.loading = null;
+      return e;
+    })();
+  }
+  return e.loading;
+}
+const usedImages = (blocks) => [...new Set(blocks.flatMap((b) => b.cells.map((c) => c.img)).filter((id) => id != null && S.images.has(id)))].map((id) => S.images.get(id));
 
 async function importFiles(list) {
   const files = [...list];
@@ -150,8 +266,11 @@ async function importFiles(list) {
 function removeImage(id) {
   const e = S.images.get(id);
   if (!e) return;
-  S.blocks.forEach((b) => b.cells.forEach((c) => { if (c.img === id) { c.img = null; c.crop = mkCrop(); } }));
-  URL.revokeObjectURL(e.levels[0].src.src);
+  const usedIn = S.projects.filter((p) => p.blocks.some((b) => b.cells.some((c) => c.img === id))).length;
+  if (usedIn && !confirm(`Фото используется в ${usedIn} ${plural(usedIn, 'карусели', 'каруселях', 'каруселях')}. Убрать его из каталога?`)) return;
+  S.projects.forEach((p) => p.blocks.forEach((b) => b.cells.forEach((c) => { if (c.img === id) { c.img = null; c.crop = mkCrop(); } })));
+  if (e.levels) URL.revokeObjectURL(e.levels[0].src.src);
+  if (e.src) Catalog.remove(e.src).catch(() => {});
   S.images.delete(id);
   S.order = S.order.filter((x) => x !== id);
   S.sel = S.sel.filter((x) => x !== id);
@@ -212,7 +331,7 @@ function drawCell(ctx, e, crop, a, r, bg) {
   ctx.restore();
 }
 
-function drawPlaceholder(ctx, r, i) {
+function drawPlaceholder(ctx, r, i, label) {
   ctx.save();
   ctx.fillStyle = '#1a1c21'; ctx.fillRect(r.x, r.y, r.w, r.h);
   const d = Math.max(1, Math.min(r.w, r.h) / 120);
@@ -220,7 +339,7 @@ function drawPlaceholder(ctx, r, i) {
   ctx.strokeRect(r.x + 4 * d, r.y + 4 * d, r.w - 8 * d, r.h - 8 * d);
   const fs = clamp(Math.min(r.w, r.h) * 0.12, 7, 15 * dpr());
   ctx.fillStyle = '#6b6f78'; ctx.font = `500 ${fs}px Inter, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(r.w > fs * 9 ? `Фото ${i + 1} — перетащи сюда` : String(i + 1), r.x + r.w / 2, r.y + r.h / 2);
+  ctx.fillText(label || (r.w > fs * 9 ? `Фото ${i + 1} — перетащи сюда` : String(i + 1)), r.x + r.w / 2, r.y + r.h / 2);
   ctx.restore();
 }
 
@@ -256,8 +375,11 @@ function paint(ctx, b, L, ox, oy, k, placeholders) {
   L.cells.forEach((r, i) => {
     const c = b.cells[i], e = c.img != null && S.images.get(c.img), a = r.w / r.h;
     const rr = { x: r.x * k, y: r.y * k, w: r.w * k, h: r.h * k };
-    if (e) { clampCrop(e, c.crop, a, b.margins); drawCell(ctx, e, c.crop, a, rr, b.bg); }
-    else if (placeholders) drawPlaceholder(ctx, rr, i);
+    if (e && e.levels) { clampCrop(e, c.crop, a, b.margins); drawCell(ctx, e, c.crop, a, rr, b.bg); }
+    else if (e) {
+      if (!e.missing) ensureLoaded(e).then(() => { queueEditor(); dirty(); });
+      drawPlaceholder(ctx, rr, i, e.missing ? 'Файл не найден' : 'Загрузка…');
+    } else if (placeholders) drawPlaceholder(ctx, rr, i);
     else { ctx.fillStyle = b.bg; ctx.fillRect(rr.x, rr.y, rr.w, rr.h); }
   });
   drawText(ctx, b, L, k);
@@ -479,7 +601,7 @@ function renderLibrary() {
   for (const id of S.order) {
     const e = S.images.get(id), si = S.sel.indexOf(id);
     const d = document.createElement('div');
-    d.className = 'thumb' + (si >= 0 ? ' sel' : '');
+    d.className = 'thumb' + (si >= 0 ? ' sel' : '') + (e.missing ? ' missing' : '');
     d.draggable = true;
     d.title = `${e.name} · ${e.w}×${e.h}\nДвойной клик — вставить в выбранную ячейку`;
     d.innerHTML = `<img src="${e.thumb}" alt=""><span class="badge">${si + 1}</span>${used.has(id) ? '<i class="used"></i>' : ''}<button class="rm" title="Убрать из библиотеки">✕</button>`;
@@ -696,7 +818,7 @@ $('#panel').addEventListener('click', (ev) => {
 
 // ---------- таймлайн ----------
 let tlTimer = 0;
-function dirty() { clearTimeout(tlTimer); tlTimer = setTimeout(() => { renderTimeline(); renderLibrary(); }, 140); }
+function dirty() { clearTimeout(tlTimer); tlTimer = setTimeout(() => { renderTimeline(); renderLibrary(); }, 140); scheduleSave(); }
 
 function renderTimeline() {
   const tl = $('#timeline');
@@ -743,10 +865,12 @@ function renderTimeline() {
 }
 
 function refreshAll() {
+  renderProjects();
   renderLibrary();
   buildPanel();
   renderEditor();
   renderTimeline();
+  scheduleSave();
 }
 
 // ---------- шрифты ----------
@@ -762,6 +886,7 @@ const toBlob = (c, q) => new Promise((res) => c.toBlob(res, 'image/jpeg', q));
 // Каждый слайд рисуется отдельно со сдвигом: геометрия общая, поэтому швов нет, а память не раздувается.
 async function renderSlides(W, onStep) {
   await ensureFonts();
+  await Promise.all(usedImages(S.blocks).map(ensureLoaded));
   const { H } = frameSize(W);
   const out = [], total = totalSlides();
   let idx = 1;
@@ -890,7 +1015,9 @@ async function sendSelectedToPc() {
     for (let i = 0; i < ids.length; i++) {
       const e = S.images.get(ids[i]);
       busy(`Отправка на ПК… ${i + 1}/${ids.length}`);
-      const r = await api(`/api/upload?name=${encodeURIComponent(e.name)}`, { method: 'POST', body: e.file });
+      const body = e.file || (e.src && (await Catalog.get(e.src)));
+      if (!body) throw new Error(`нет файла ${e.name}`);
+      const r = await api(`/api/upload?name=${encodeURIComponent(e.name)}`, { method: 'POST', body });
       if (!r.ok) throw new Error(r.status);
     }
     busy(false);
@@ -971,16 +1098,97 @@ $('#libPane').classList.add('show');
 if (NATIVE) {
   $('#phoneBtn').hidden = false;
   if (HAS_API) { pollInbox(); setInterval(pollInbox, 4000); }
-} else {
-  if (HAS_API) $('[data-lib="send"]').hidden = false;
-  window.addEventListener('beforeunload', (ev) => { if (S.blocks.length) { ev.preventDefault(); ev.returnValue = ''; } });
+} else if (HAS_API) $('[data-lib="send"]').hidden = false;
+
+// ---------- карусели: выбор, создание, переименование, удаление ----------
+$('#projSel').addEventListener('change', (ev) => switchProject(+ev.target.value));
+$('#projNew').addEventListener('click', () => { switchProject(newProject().id); toast('Новая карусель создана'); });
+$('#projRen').addEventListener('click', () => {
+  const p = S.projects.find((x) => x.id === S.project);
+  $('#renameInput').value = p.name;
+  openModal('renameModal');
+  setTimeout(() => { $('#renameInput').focus(); $('#renameInput').select(); }, 30);
+});
+function applyRename() {
+  const p = S.projects.find((x) => x.id === S.project);
+  p.name = $('#renameInput').value.trim() || p.name;
+  closeModals();
+  refreshAll();
 }
+$('#renameOk').addEventListener('click', applyRename);
+$('#renameInput').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') applyRename(); });
+$('#projDel').addEventListener('click', () => {
+  const p = S.projects.find((x) => x.id === S.project);
+  if (!confirm(`Удалить карусель «${p.name}»? Фото останутся в каталоге.`)) return;
+  S.projects = S.projects.filter((x) => x !== p);
+  if (!S.projects.length) newProject();
+  S.project = null;
+  switchProject(S.projects[0].id);
+});
+
+// ---------- настройки ----------
+function buildSettings() {
+  const zoom = S.zoom || 1.15;
+  $('#settingsBody').innerHTML = NATIVE ? `
+    <div class="sec">Каталог</div>
+    <p class="small-text">Фото и все карусели сохраняются сюда автоматически и остаются после закрытия — пока ты сам их не уберёшь.</p>
+    <div class="url-box">${esc(S.catalogDir || '')}</div>
+    <div class="btn-row"><button class="small" data-set="open">Открыть папку</button><button class="small ghost" data-set="switch">Сменить каталог…</button></div>
+    <div class="sec">Импорт фото</div>
+    <label class="radio"><input type="radio" name="imode" value="copy" ${S.importMode === 'copy' ? 'checked' : ''}><span><b>Копировать в каталог</b><br><span class="muted">Надёжно: фото не пропадут, даже если отключить флешку или удалить исходник.</span></span></label>
+    <label class="radio"><input type="radio" name="imode" value="link" ${S.importMode === 'link' ? 'checked' : ''}><span><b>Только ссылка на файл</b><br><span class="muted">Экономит место. Если исходник переместить или удалить — фото пропадёт из Cropper.</span></span></label>
+    <div class="sec">Интерфейс</div>
+    <label class="row two"><span>Масштаб</span><select data-set="zoom">${[1, 1.1, 1.15, 1.25, 1.35, 1.5].map((z) => `<option value="${z}" ${Math.abs(z - zoom) < 0.001 ? 'selected' : ''}>${Math.round(z * 100)}%</option>`).join('')}</select></label>`
+    : `
+    <div class="sec">Хранение</div>
+    <p class="small-text">Фото и карусели сохраняются в памяти браузера на этом устройстве и остаются после закрытия. В другом браузере или на другом устройстве их не будет.</p>
+    <button class="small ghost" data-set="wipe">Очистить всё на этом устройстве</button>`;
+}
+$('#settingsBtn').addEventListener('click', () => { buildSettings(); openModal('settingsModal'); });
+$('#settingsBody').addEventListener('change', (ev) => {
+  if (ev.target.name === 'imode') { S.importMode = ev.target.value; store.set('importMode', S.importMode); }
+  if (ev.target.dataset.set === 'zoom') { S.zoom = +ev.target.value; NATIVE.setZoom(S.zoom); }
+});
+$('#settingsBody').addEventListener('click', async (ev) => {
+  const a = ev.target.dataset.set;
+  if (a === 'open') NATIVE.openPath(S.catalogDir);
+  if (a === 'switch') {
+    saveNow();
+    const dir = await NATIVE.catalogSwitch();
+    if (!dir) return;
+    catalogReady = false; // не записывать текущее состояние в новый каталог
+    location.reload();
+  }
+  if (a === 'wipe' && confirm('Удалить все фото и карусели из памяти этого браузера?')) {
+    catalogReady = false;
+    indexedDB.deleteDatabase('cropper');
+    setTimeout(() => location.reload(), 300);
+  }
+});
 
 // Офлайн-режим только для онлайн-версии (https). В окне приложения кэш не нужен — там всегда свежие файлы.
 if (location.protocol === 'https:' && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
-fillWidths();
-renderTemplates();
-new ResizeObserver(sizeEditor).observe(edwrap);
-window.addEventListener('resize', () => dirty());
-refreshAll();
+window.addEventListener('beforeunload', saveNow);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
+
+async function init() {
+  fillWidths();
+  renderTemplates();
+  new ResizeObserver(sizeEditor).observe(edwrap);
+  window.addEventListener('resize', () => dirty());
+  let ok = true;
+  try {
+    const r = await Catalog.load();
+    S.catalogDir = r.dir; S.zoom = r.zoom;
+    if (r.data) restore(r.data);
+  } catch (e) {
+    ok = false; // не перезаписываем каталог, который не смогли прочитать
+    toast('Каталог не открылся, изменения не сохраняются: ' + e.message);
+  }
+  if (!S.projects.length) switchProject(newProject().id, true);
+  catalogReady = ok;
+  refreshAll();
+  if (!NATIVE && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+}
+init();

@@ -34,6 +34,7 @@
     </label>
   </div>
   <div class="top-actions">
+    <button id="settingsBtn" class="ghost icon-btn" title="Настройки и каталог">⚙</button>
     <button id="phoneBtn" class="ghost" hidden>Телефон</button>
     <button id="previewBtn" class="ghost">Просмотр</button>
     <button id="exportBtn" class="accent">Экспорт</button>
@@ -91,7 +92,10 @@
 
 <footer class="tl">
   <div class="tl-bar">
-    <strong>Карусель</strong>
+    <select id="projSel" class="proj-sel" title="Карусели сохраняются автоматически"></select>
+    <button id="projNew" class="small ghost" title="Новая карусель">+ Новая</button>
+    <button id="projRen" class="small ghost icon-btn" title="Переименовать">✎</button>
+    <button id="projDel" class="small ghost icon-btn" title="Удалить карусель">🗑</button>
     <span id="slideCount" class="muted"></span>
   </div>
   <div id="timeline" class="timeline"></div>
@@ -144,6 +148,20 @@
       <button id="dlAllBtn" class="ghost">Скачать все</button>
       <button id="toPcBtn" class="ghost" hidden>Сохранить на ПК</button>
     </div>
+  </div>
+</div>
+
+<div class="modal" id="settingsModal" hidden>
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong>Настройки</strong><button class="ghost close" data-close>✕</button></div>
+    <div id="settingsBody" class="settings-body"></div>
+  </div>
+</div>
+
+<div class="modal" id="renameModal" hidden>
+  <div class="modal-card narrow">
+    <div class="modal-head"><strong>Название карусели</strong><button class="ghost close" data-close>✕</button></div>
+    <div class="btn-row"><input type="text" id="renameInput" class="grow" spellcheck="false"><button id="renameOk" class="accent">Сохранить</button></div>
   </div>
 </div>
 
