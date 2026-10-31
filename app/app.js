@@ -117,9 +117,9 @@ async function addImageFile(file) {
   if (!/^image\//.test(file.type) && !/\.(jpe?g|png|webp|avif|gif|bmp)$/i.test(file.name)) return null;
   const url = URL.createObjectURL(file);
   const img = new Image();
-  img.decoding = 'async';
-  img.src = url;
-  try { await img.decode(); } catch { URL.revokeObjectURL(url); toast(`Не удалось открыть ${file.name}`); return null; }
+  // onload, а не img.decode(): decode() может не завершиться в свёрнутом/скрытом окне
+  const ok = await new Promise((res) => { img.onload = () => res(true); img.onerror = () => res(false); img.src = url; });
+  if (!ok || !img.naturalWidth) { URL.revokeObjectURL(url); toast(`Не удалось открыть ${file.name}`); return null; }
   const e = { id: uid++, name: file.name, file, w: img.naturalWidth, h: img.naturalHeight };
   e.levels = [{ src: img, w: e.w, h: e.h, f: 1 }];
   const s = 300 / Math.max(e.w, e.h);
