@@ -1,7 +1,7 @@
 {
   "name": "cropper",
   "productName": "Cropper",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Кроп и коллажи для Instagram-каруселей",
   "main": "main.js",
   "author": "phantemasta",

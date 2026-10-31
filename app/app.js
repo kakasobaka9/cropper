@@ -391,6 +391,28 @@ const ed = $('#editor'), edx = ed.getContext('2d');
 let EM = null, edQueued = false;
 const queueEditor = () => { if (!edQueued) { edQueued = true; requestAnimationFrame(() => { edQueued = false; renderEditor(); }); } };
 
+// Вид холста (как в Photoshop): масштаб поверх «вписать» и сдвиг в CSS-пикселях
+const VIEW = { block: null, z: 1, x: 0, y: 0 };
+function viewZoomAt(p, f) {
+  if (!EM) return;
+  const d = dpr(), z = clamp(VIEW.z * f, 0.2, 12);
+  const u = (p.x - EM.ox) / EM.k, v = (p.y - EM.oy) / EM.k; // точка кадра под курсором остаётся на месте
+  const k2 = EM.kFit * z;
+  VIEW.x = (p.x - u * k2 - (ed.width - EM.L.w * k2) / 2) / d;
+  VIEW.y = (p.y - v * k2 - (ed.height - EM.L.h * k2) / 2) / d;
+  VIEW.z = z;
+  queueEditor();
+}
+function viewFit() { Object.assign(VIEW, { z: 1, x: 0, y: 0 }); queueEditor(); }
+function edCenter() { return { x: ed.width / 2, y: ed.height / 2 }; }
+function toggleFocus(on = !document.body.classList.contains('focus')) {
+  document.body.classList.toggle('focus', on);
+  if (on && document.documentElement.requestFullscreen && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+  if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  setTimeout(viewFit, 60);
+}
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.body.classList.contains('focus')) toggleFocus(false); });
+
 function sizeEditor() {
   const r = ed.parentElement.getBoundingClientRect(), d = dpr();
   ed.width = Math.max(1, Math.round(r.width * d));
@@ -408,10 +430,13 @@ function renderEditor() {
   const { W, H } = frameSize(S.width);
   const L = layout(b, W, H);
   const pad = (isPhoneLayout() ? 10 : 34) * d;
-  const k = Math.min((ed.width - 2 * pad) / L.w, (ed.height - 2 * pad - (isPhoneLayout() ? 0 : 20 * d)) / L.h);
-  const ox = Math.round((ed.width - L.w * k) / 2), oy = Math.round((ed.height - L.h * k) / 2);
+  const kFit = Math.min((ed.width - 2 * pad) / L.w, (ed.height - 2 * pad - (isPhoneLayout() ? 0 : 36 * d)) / L.h);
+  if (VIEW.block !== b.id) Object.assign(VIEW, { block: b.id, z: 1, x: 0, y: 0 }); // новый блок — вписать
+  const k = kFit * VIEW.z;
+  const ox = Math.round((ed.width - L.w * k) / 2 + VIEW.x * d), oy = Math.round((ed.height - L.h * k) / 2 + VIEW.y * d);
   paint(edx, b, L, ox, oy, k, true);
-  EM = { b, L, ox, oy, k, W, H };
+  EM = { b, L, ox, oy, k, W, H, kFit };
+  $('#zoomPct').textContent = `${Math.round(VIEW.z * 100)}%`;
 
   edx.save();
   if (b.type === 'pano' && b.n > 1) {
@@ -481,12 +506,20 @@ function zoomAt(i, p, f) {
 }
 
 const ptrs = new Map();
-let drag = null, pinch = null;
+let drag = null, pinch = null, viewDrag = null, spaceDown = false;
 ed.addEventListener('pointerdown', (ev) => {
   if (!EM) return;
   const p = edPoint(ev);
   const i = cellAt(p);
-  if (i < 0 && !ptrs.size) return;
+  // Двигаем холст: пробел + мышь, средняя кнопка или перетаскивание по пустому месту
+  if (!ptrs.size && (spaceDown || ev.button === 1 || i < 0)) {
+    ev.preventDefault();
+    ed.setPointerCapture(ev.pointerId);
+    viewDrag = { id: ev.pointerId, last: p };
+    ed.classList.add('dragging');
+    return;
+  }
+  if (viewDrag) return;
   ed.setPointerCapture(ev.pointerId);
   ptrs.set(ev.pointerId, p);
   if (ptrs.size === 1) {
@@ -500,6 +533,14 @@ ed.addEventListener('pointerdown', (ev) => {
   }
 });
 ed.addEventListener('pointermove', (ev) => {
+  if (viewDrag && viewDrag.id === ev.pointerId) {
+    const p = edPoint(ev), d = dpr();
+    VIEW.x += (p.x - viewDrag.last.x) / d;
+    VIEW.y += (p.y - viewDrag.last.y) / d;
+    viewDrag.last = p;
+    queueEditor();
+    return;
+  }
   if (!ptrs.has(ev.pointerId)) return;
   const p = edPoint(ev);
   ptrs.set(ev.pointerId, p);
@@ -516,6 +557,7 @@ ed.addEventListener('pointermove', (ev) => {
   queueEditor();
 });
 function endPointer(ev) {
+  if (viewDrag && viewDrag.id === ev.pointerId) { viewDrag = null; ed.classList.remove('dragging'); return; }
   if (!ptrs.has(ev.pointerId)) return;
   ptrs.delete(ev.pointerId);
   if (ptrs.size < 2) pinch = null;
@@ -528,7 +570,8 @@ ed.addEventListener('wheel', (ev) => {
   if (!EM) return;
   ev.preventDefault();
   const p = edPoint(ev), i = cellAt(p);
-  if (i < 0) return;
+  // Ctrl/Alt + колесо (и щипок на тачпаде) или колесо мимо кадра — масштаб холста; просто колесо над фото — зум фото в кадре
+  if (ev.ctrlKey || ev.altKey || ev.metaKey || i < 0) { viewZoomAt(p, Math.exp(-ev.deltaY * 0.002)); return; }
   if (S.cell !== i) { S.cell = i; buildPanel(); }
   zoomAt(i, p, Math.exp(-ev.deltaY * 0.0015));
   queueEditor();
@@ -578,8 +621,17 @@ document.addEventListener('keydown', (ev) => {
     if (ev.key === 'ArrowLeft') igGo(-1); else if (ev.key === 'ArrowRight') igGo(1); else if (ev.key === 'Escape') closeModals();
     return;
   }
-  if (ev.key === 'Escape') return closeModals();
+  if (ev.key === 'Escape') { if (document.body.classList.contains('focus')) toggleFocus(false); return closeModals(); }
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'e') { ev.preventDefault(); doExport(); return; }
+  if (ev.code === 'Space') { ev.preventDefault(); if (!spaceDown) { spaceDown = true; ed.classList.add('panmode'); } return; }
+  if (ev.ctrlKey || ev.metaKey) {
+    if (ev.key === '=' || ev.key === '+') { ev.preventDefault(); viewZoomAt(edCenter(), 1.25); }
+    else if (ev.key === '-') { ev.preventDefault(); viewZoomAt(edCenter(), 0.8); }
+    else if (ev.key === '0') { ev.preventDefault(); viewFit(); }
+    return;
+  }
+  if (ev.key === '0') return viewFit();
+  if (ev.code === 'KeyF') return toggleFocus();
   if (!EM || !cellCtx(S.cell)) return;
   const step = (ev.shiftKey ? 40 : 6) * dpr();
   const mv = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[ev.key];
@@ -588,6 +640,15 @@ document.addEventListener('keydown', (ev) => {
   else if (ev.key === '-') zoomAt(S.cell, cellCenter(S.cell), 1 / 1.08);
   else return;
   queueEditor(); dirty();
+});
+document.addEventListener('keyup', (ev) => {
+  if (ev.code === 'Space' && spaceDown) { ev.preventDefault(); spaceDown = false; ed.classList.remove('panmode'); }
+});
+window.addEventListener('blur', () => { spaceDown = false; ed.classList.remove('panmode'); });
+document.querySelector('.ed-view').addEventListener('click', (ev) => {
+  const a = ev.target.closest('[data-v]');
+  if (!a) return;
+  ({ in: () => viewZoomAt(edCenter(), 1.25), out: () => viewZoomAt(edCenter(), 0.8), fit: viewFit, full: () => toggleFocus() })[a.dataset.v]();
 });
 function cellCenter(i) { const r = EM.L.cells[i]; return { x: EM.ox + (r.x + r.w / 2) * EM.k, y: EM.oy + (r.y + r.h / 2) * EM.k }; }
 
