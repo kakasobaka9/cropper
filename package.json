@@ -10,7 +10,7 @@
     "start": "electron .",
     "fonts": "node scripts/copy-fonts.js",
     "dist": "npm run fonts && node scripts/make-icon.js && electron-builder --win nsis",
-    "release": "npm run fonts && node scripts/make-icon.js && electron-builder --win nsis --publish always"
+    "release": "node scripts/release.js"
   },
   "build": {
     "appId": "com.phantemasta.cropper",
