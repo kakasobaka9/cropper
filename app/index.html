@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'">
+<meta name="theme-color" content="#0e0f11">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cropper">
+<title>Cropper</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="icon-192.png" alt=""><span>Cropper</span></div>
+  <div class="top-controls">
+    <label class="ctl" title="Формат слайда Instagram">
+      <span>Формат</span>
+      <select id="frameSel">
+        <option value="4:5">4:5 — портрет</option>
+        <option value="3:4">3:4 — высокий</option>
+        <option value="1:1">1:1 — квадрат</option>
+      </select>
+    </label>
+    <label class="ctl" title="Ширина слайда при экспорте">
+      <span>Размер</span>
+      <select id="widthSel"></select>
+    </label>
+  </div>
+  <div class="top-actions">
+    <button id="phoneBtn" class="ghost" hidden>Телефон</button>
+    <button id="previewBtn" class="ghost">Просмотр</button>
+    <button id="exportBtn" class="accent">Экспорт</button>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="lib sheet" id="libPane">
+    <div class="pane-head">
+      <h2>Фото <span id="libCount" class="muted"></span></h2>
+      <button id="addBtn" class="accent small">+ Добавить</button>
+    </div>
+    <input id="fileInput" type="file" accept="image/*" multiple hidden>
+    <input id="cellFile" type="file" accept="image/*" hidden>
+    <button id="inboxBtn" class="inbox" hidden></button>
+    <div id="libGrid" class="lib-grid">
+      <div class="drop-hint" id="libEmpty">
+        Перетащи сюда фото с компьютера<br>или нажми «+ Добавить»
+      </div>
+    </div>
+    <div class="lib-actions">
+      <div class="muted small-text" id="selInfo">Клик по фото выбирает его. Номера задают порядок для шаблонов.</div>
+      <div class="btn-row">
+        <button data-lib="insert" class="small">Вставить в ячейку</button>
+        <button data-lib="all" class="small ghost">Выбрать все</button>
+        <button data-lib="none" class="small ghost">Снять выбор</button>
+      </div>
+      <button data-lib="send" class="small ghost wide" hidden>Отправить выбранные на ПК</button>
+    </div>
+  </aside>
+
+  <section class="stage">
+    <div class="templates" id="templates"></div>
+    <div class="edwrap" id="edwrap">
+      <canvas id="editor"></canvas>
+      <div class="ed-empty" id="edEmpty">
+        <h3>С чего начать</h3>
+        <ol>
+          <li>Добавь фото в библиотеку слева</li>
+          <li>Выбери их кликом — по порядку</li>
+          <li>Нажми шаблон сверху: «Кино-карусель», «Сплит на 2»…</li>
+          <li>Двигай кадр мышью/пальцем, колесо или щипок — зум</li>
+          <li>«Экспорт» — готовые слайды по порядку</li>
+        </ol>
+      </div>
+      <div class="ed-chips">
+        <label class="chip"><input type="checkbox" id="ovGrid"> Сетка профиля 3:4</label>
+        <label class="chip"><input type="checkbox" id="ovThirds"> Трети</label>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel sheet" id="panel"></aside>
+</main>
+
+<footer class="tl">
+  <div class="tl-bar">
+    <strong>Карусель</strong>
+    <span id="slideCount" class="muted"></span>
+  </div>
+  <div id="timeline" class="timeline"></div>
+</footer>
+
+<nav class="mtabs" id="mtabs">
+  <button data-tab="lib" class="on">Фото</button>
+  <button data-tab="panel">Настройки</button>
+</nav>
+
+<div class="modal" id="previewModal" hidden>
+  <div class="modal-card ig">
+    <div class="modal-head"><strong>Как это будет в Instagram</strong><button class="ghost close" data-close>✕</button></div>
+    <div class="ig-frame" id="igFrame"><div class="ig-track" id="igTrack"></div>
+      <button class="ig-nav prev" id="igPrev">‹</button><button class="ig-nav next" id="igNext">›</button>
+      <div class="ig-counter" id="igCounter"></div>
+    </div>
+    <div class="ig-dots" id="igDots"></div>
+  </div>
+</div>
+
+<div class="modal" id="phoneModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><strong>Открыть Cropper на телефоне</strong><button class="ghost close" data-close>✕</button></div>
+    <div class="phone-body">
+      <img id="qrImg" alt="QR-код">
+      <div>
+        <ol class="steps">
+          <li>Телефон должен быть в той же Wi-Fi сети, что и компьютер.</li>
+          <li>Наведи камеру телефона на QR-код и открой ссылку.</li>
+          <li>В браузере: «Поделиться» → «На экран Домой» — появится иконка-приложение.</li>
+          <li>Фото с телефона можно обработать прямо там или отправить на ПК во «Входящие».</li>
+        </ol>
+        <div class="url-box" id="phoneUrl"></div>
+        <p class="muted small-text">Если не открывается — разреши Cropper доступ в «Частные сети» в окне брандмауэра Windows. Компьютер должен быть включён, а приложение запущено.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="resultModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head"><strong id="resultTitle">Готово</strong><button class="ghost close" data-close>✕</button></div>
+    <p class="muted small-text" id="resultHint">Удерживай палец на картинке → «Сохранить в Фото». Или используй кнопки ниже.</p>
+    <div class="result-grid" id="resultGrid"></div>
+    <div class="btn-row end">
+      <button id="shareBtn" class="accent" hidden>Сохранить / поделиться</button>
+      <button id="dlAllBtn" class="ghost">Скачать все</button>
+      <button id="toPcBtn" class="ghost" hidden>Сохранить на ПК</button>
+    </div>
+  </div>
+</div>
+
+<div class="busy" id="busy" hidden><div class="busy-card"><div class="spinner"></div><span id="busyText">Работаю…</span></div></div>
+<div class="toast" id="toast" hidden><span id="toastText"></span><button id="toastBtn" class="ghost small" hidden></button></div>
+
+<script src="app.js"></script>
+</body>
+</html>
