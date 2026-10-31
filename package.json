@@ -1,7 +1,7 @@
 {
   "name": "cropper",
   "productName": "Cropper",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Кроп и коллажи для Instagram-каруселей",
   "main": "main.js",
   "author": "phantemasta",
@@ -9,7 +9,8 @@
   "scripts": {
     "start": "electron .",
     "fonts": "node scripts/copy-fonts.js",
-    "dist": "npm run fonts && node scripts/make-icon.js && electron-builder --win nsis"
+    "dist": "npm run fonts && node scripts/make-icon.js && electron-builder --win nsis",
+    "release": "npm run fonts && node scripts/make-icon.js && electron-builder --win nsis --publish always"
   },
   "build": {
     "appId": "com.phantemasta.cropper",
@@ -31,18 +32,31 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "shortcutName": "Cropper"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kakasobaka9",
+        "repo": "cropper",
+        "releaseType": "release"
+      }
+    ]
   },
   "devDependencies": {
-    "electron": "^45.2.1",
-    "electron-builder": "^26.18.0",
     "@fontsource/bebas-neue": "^5.3.0",
     "@fontsource/bodoni-moda": "^5.3.0",
     "@fontsource/cormorant-garamond": "^5.3.0",
     "@fontsource/inter": "^5.3.0",
-    "@fontsource/playfair-display": "^5.3.0"
+    "@fontsource/playfair-display": "^5.3.0",
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0"
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "qrcode": "^1.5.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kakasobaka9/cropper.git"
   }
 }

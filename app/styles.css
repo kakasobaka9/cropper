@@ -220,6 +220,12 @@ input[type=color] { width: 34px; height: 26px; border: 1px solid var(--line-2); 
 .radio:has(input:checked) { border-color: var(--accent); background: rgba(255,138,61,.07); }
 .radio input { margin-top: 3px; accent-color: var(--accent); }
 .grow { flex: 1; }
+.update-btn { background: #2b6a43; border-color: #3c8a5a; color: #eafff1; font-weight: 600; }
+.update-btn:hover { background: #33804f; border-color: #4aa36b; }
+.rel-list { display: grid; gap: 6px; margin-top: 6px; max-height: 260px; overflow-y: auto; }
+.rel { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 12px; }
+.rel.current { border-color: #3c8a5a; background: rgba(60,138,90,.08); }
+.rel-notes { margin-top: 2px; white-space: pre-line; max-height: 3.2em; overflow: hidden; }
 .thumb.missing img { opacity: .35; filter: grayscale(1); }
 .thumb.missing::after { content: 'нет файла'; position: absolute; left: 0; right: 0; bottom: 4px; text-align: center; font-size: 10px; color: #ff9b9b; }
 

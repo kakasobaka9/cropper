@@ -15,4 +15,13 @@ contextBridge.exposeInMainWorld('cropperNative', {
   trash: (p) => ipcRenderer.invoke('trash', p),
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
   setZoom: (f) => ipcRenderer.invoke('set-zoom', f),
+  // обновления
+  updateStatus: () => ipcRenderer.invoke('update-status'),
+  updateCheck: () => ipcRenderer.invoke('update-check'),
+  updateInstall: () => ipcRenderer.invoke('update-install'),
+  onUpdate: (cb) => ipcRenderer.on('update-status', (_e, s) => cb(s)),
+  setAutoUpdate: (on) => ipcRenderer.invoke('set-auto-update', on),
+  releases: () => ipcRenderer.invoke('releases-list'),
+  installRelease: (rel) => ipcRenderer.invoke('release-install', rel),
+  onRollbackProgress: (cb) => ipcRenderer.on('rollback-progress', (_e, p) => cb(p)),
 });

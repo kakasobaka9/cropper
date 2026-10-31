@@ -1,6 +1,8 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { spawn } = require('child_process');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
 const { createServer, lanAddresses } = require('./server');
@@ -105,6 +107,83 @@ ipcMain.handle('catalog-switch', async () => {
   backedUp = false;
   return config.catalogDir;
 });
+// ---------- автообновление из GitHub Releases ----------
+// Проверяем при запуске и раз в 2 часа, качаем в фоне. Ставится по кнопке «Перезапустить» или само при выходе.
+let updater = null;
+const update = { state: 'idle', version: null, progress: 0, error: null };
+const updateLog = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'updater.log'), `${new Date().toISOString()} ${msg}\n`); } catch {} };
+function pushUpdate(patch) {
+  Object.assign(update, patch);
+  if (win && !win.isDestroyed()) win.webContents.send('update-status', update);
+}
+function initUpdater() {
+  if (!app.isPackaged) return;
+  ({ autoUpdater: updater } = require('electron-updater'));
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.logger = { info: updateLog, warn: updateLog, error: updateLog, debug: () => {} };
+  updater.on('checking-for-update', () => pushUpdate({ state: 'checking', error: null }));
+  updater.on('update-available', (i) => pushUpdate({ state: 'downloading', version: i.version, progress: 0 }));
+  updater.on('update-not-available', () => pushUpdate({ state: 'latest' }));
+  updater.on('download-progress', (p) => pushUpdate({ progress: Math.round(p.percent) }));
+  updater.on('update-downloaded', (i) => pushUpdate({ state: 'ready', version: i.version, progress: 100 }));
+  updater.on('error', (e) => pushUpdate({ state: 'error', error: String(e && e.message || e).slice(0, 200) }));
+  const check = () => { if (config.autoUpdate !== false) updater.checkForUpdates().catch((e) => updateLog('check failed ' + e)); };
+  setTimeout(check, 4000);
+  setInterval(check, 2 * 60 * 60 * 1000);
+}
+ipcMain.handle('update-status', () => ({ ...update, current: app.getVersion(), packaged: app.isPackaged, auto: config.autoUpdate !== false }));
+ipcMain.handle('set-auto-update', (_e, on) => {
+  config.autoUpdate = !!on;
+  saveConfig();
+  if (on && updater) updater.checkForUpdates().catch(() => {});
+});
+
+// ---------- откат: любая версия из GitHub Releases ставится поверх текущей ----------
+const RELEASES_API = 'https://api.github.com/repos/kakasobaka9/cropper/releases?per_page=30';
+const cmpVer = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
+
+ipcMain.handle('releases-list', async () => {
+  const r = await net.fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Cropper' } });
+  if (!r.ok) throw new Error(`GitHub ответил ${r.status}`);
+  return (await r.json())
+    .filter((x) => !x.draft)
+    .map((x) => {
+      const exe = x.assets.find((a) => /\.exe$/i.test(a.name));
+      return { version: x.tag_name.replace(/^v/, ''), date: x.published_at, notes: (x.body || '').slice(0, 400), url: exe && exe.browser_download_url, size: exe && exe.size };
+    })
+    .filter((x) => x.url)
+    .sort((a, b) => cmpVer(b.version, a.version));
+});
+
+ipcMain.handle('release-install', async (_e, rel) => {
+  if (!/^https:\/\/github\.com\/kakasobaka9\/cropper\/releases\/download\//.test(rel.url)) throw new Error('чужая ссылка');
+  const file = path.join(os.tmpdir(), `Cropper-Setup-${rel.version}.exe`);
+  const r = await net.fetch(rel.url);
+  if (!r.ok) throw new Error(`загрузка: ${r.status}`);
+  const total = +r.headers.get('content-length') || rel.size || 0;
+  const out = fs.createWriteStream(file);
+  let got = 0;
+  for await (const chunk of r.body) {
+    out.write(chunk);
+    got += chunk.length;
+    if (win && total) win.webContents.send('rollback-progress', Math.round((got / total) * 100));
+  }
+  await new Promise((res) => out.end(res));
+  // Откат на более старую — выключаем автообновление, иначе оно сразу вернёт новую версию
+  if (cmpVer(rel.version, app.getVersion()) < 0) { config.autoUpdate = false; saveConfig(); }
+  spawn(file, ['/S', '--force-run'], { detached: true, stdio: 'ignore' }).unref();
+  setTimeout(() => app.quit(), 300);
+  return true;
+});
+ipcMain.handle('update-check', () => { if (updater) updater.checkForUpdates().catch(() => {}); return !!updater; });
+ipcMain.handle('update-install', () => {
+  if (!updater || update.state !== 'ready') return false;
+  // окно закроется штатно → beforeunload в интерфейсе успеет сохранить каталог
+  setImmediate(() => updater.quitAndInstall(true, true));
+  return true;
+});
+
 ipcMain.handle('set-zoom', (_e, f) => {
   config.zoom = f;
   saveConfig();
@@ -147,6 +226,7 @@ app.whenReady().then(async () => {
   port = await srv.listen(config.port || 47800);
   if (config.port !== port) { config.port = port; saveConfig(); }
   createWindow();
+  initUpdater();
 });
 
 app.on('window-all-closed', () => app.quit());

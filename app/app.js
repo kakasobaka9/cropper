@@ -1138,19 +1138,39 @@ function buildSettings() {
     <label class="radio"><input type="radio" name="imode" value="copy" ${S.importMode === 'copy' ? 'checked' : ''}><span><b>Копировать в каталог</b><br><span class="muted">Надёжно: фото не пропадут, даже если отключить флешку или удалить исходник.</span></span></label>
     <label class="radio"><input type="radio" name="imode" value="link" ${S.importMode === 'link' ? 'checked' : ''}><span><b>Только ссылка на файл</b><br><span class="muted">Экономит место. Если исходник переместить или удалить — фото пропадёт из Cropper.</span></span></label>
     <div class="sec">Интерфейс</div>
-    <label class="row two"><span>Масштаб</span><select data-set="zoom">${[1, 1.1, 1.15, 1.25, 1.35, 1.5].map((z) => `<option value="${z}" ${Math.abs(z - zoom) < 0.001 ? 'selected' : ''}>${Math.round(z * 100)}%</option>`).join('')}</select></label>`
+    <label class="row two"><span>Масштаб</span><select data-set="zoom">${[1, 1.1, 1.15, 1.25, 1.35, 1.5].map((z) => `<option value="${z}" ${Math.abs(z - zoom) < 0.001 ? 'selected' : ''}>${Math.round(z * 100)}%</option>`).join('')}</select></label>
+    <div class="sec">Обновления и версии</div>
+    <div id="updInfo" class="small-text"></div>
+    <label class="row check"><input type="checkbox" data-set="auto"><span>Обновлять автоматически</span></label>
+    <div class="btn-row"><button class="small" data-set="check">Проверить сейчас</button></div>
+    <p class="muted small-text">Если новая версия что-то сломала — установи предыдущую из списка. Каталог и карусели при этом сохранятся, автообновление выключится.</p>
+    <div id="relList" class="rel-list"><span class="muted small-text">Загружаю список версий…</span></div>`
     : `
     <div class="sec">Хранение</div>
     <p class="small-text">Фото и карусели сохраняются в памяти браузера на этом устройстве и остаются после закрытия. В другом браузере или на другом устройстве их не будет.</p>
     <button class="small ghost" data-set="wipe">Очистить всё на этом устройстве</button>`;
 }
-$('#settingsBtn').addEventListener('click', () => { buildSettings(); openModal('settingsModal'); });
+$('#settingsBtn').addEventListener('click', () => {
+  buildSettings();
+  openModal('settingsModal');
+  if (NATIVE) { NATIVE.updateStatus().then(renderUpdate); loadReleases(); }
+});
 $('#settingsBody').addEventListener('change', (ev) => {
   if (ev.target.name === 'imode') { S.importMode = ev.target.value; store.set('importMode', S.importMode); }
   if (ev.target.dataset.set === 'zoom') { S.zoom = +ev.target.value; NATIVE.setZoom(S.zoom); }
+  if (ev.target.dataset.set === 'auto') { S.update.auto = ev.target.checked; NATIVE.setAutoUpdate(ev.target.checked); }
 });
 $('#settingsBody').addEventListener('click', async (ev) => {
   const a = ev.target.dataset.set;
+  if (a === 'check') { NATIVE.updateCheck(); toast('Проверяю обновления…'); }
+  if (a === 'install') {
+    const rel = S.releases[+ev.target.dataset.i];
+    const older = rel.version.localeCompare(S.update.current, undefined, { numeric: true }) < 0;
+    if (!confirm(`Установить версию ${rel.version}?${older ? ' Это откат на более старую версию — автообновление выключится.' : ''} Приложение перезапустится.`)) return;
+    saveNow();
+    busy(`Скачиваю версию ${rel.version}…`);
+    try { await NATIVE.installRelease(rel); } catch (e) { busy(false); toast('Не получилось: ' + e.message); }
+  }
   if (a === 'open') NATIVE.openPath(S.catalogDir);
   if (a === 'switch') {
     saveNow();
@@ -1165,6 +1185,42 @@ $('#settingsBody').addEventListener('click', async (ev) => {
     setTimeout(() => location.reload(), 300);
   }
 });
+
+// ---------- обновления ----------
+S.update = { state: 'idle' };
+S.releases = [];
+function renderUpdate(u) {
+  Object.assign(S.update, u);
+  u = S.update;
+  const bt = $('#updateBtn');
+  bt.hidden = u.state !== 'ready';
+  if (u.state === 'ready') bt.textContent = `⬆ Версия ${u.version} готова — перезапустить`;
+  const info = $('#updInfo');
+  if (info) {
+    const st = { checking: 'проверяю…', downloading: `скачиваю ${u.version || ''} — ${u.progress || 0}%`, ready: `версия ${u.version} скачана, установится при перезапуске`, latest: 'это последняя версия', error: `ошибка проверки: ${u.error || ''}` }[u.state];
+    info.innerHTML = `Сейчас установлена <b>${esc(u.current || '?')}</b>${st ? ' · ' + esc(st) : ''}${u.packaged === false ? ' · (режим разработки — обновления отключены)' : ''}`;
+    const auto = $('#settingsBody [data-set="auto"]');
+    if (auto) auto.checked = u.auto !== false;
+  }
+}
+async function loadReleases() {
+  const box = $('#relList');
+  try {
+    S.releases = await NATIVE.releases();
+    if (!$('#relList')) return;
+    box.innerHTML = S.releases.length ? S.releases.map((r, i) => `
+      <div class="rel ${r.version === S.update.current ? 'current' : ''}">
+        <div><b>${esc(r.version)}</b> <span class="muted">· ${new Date(r.date).toLocaleDateString('ru-RU')}</span>${r.notes ? `<div class="muted rel-notes">${esc(r.notes)}</div>` : ''}</div>
+        ${r.version === S.update.current ? '<span class="muted small-text">установлена</span>' : `<button class="small ghost" data-set="install" data-i="${i}">Установить</button>`}
+      </div>`).join('') : '<span class="muted small-text">Опубликованных версий пока нет.</span>';
+  } catch (e) { box.innerHTML = `<span class="muted small-text">Список версий недоступен: ${esc(e.message)}</span>`; }
+}
+if (NATIVE && NATIVE.onUpdate) {
+  NATIVE.onUpdate(renderUpdate);
+  NATIVE.updateStatus().then(renderUpdate);
+  NATIVE.onRollbackProgress((p) => busy(`Скачиваю версию… ${p}%`));
+  $('#updateBtn').addEventListener('click', () => { saveNow(); NATIVE.updateInstall(); });
+}
 
 // Офлайн-режим только для онлайн-версии (https). В окне приложения кэш не нужен — там всегда свежие файлы.
 if (location.protocol === 'https:' && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
