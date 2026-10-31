@@ -27,10 +27,12 @@ if (!out(`git tag --list ${tag}`)) run(`git tag ${tag}`);
 // GitHub не создаёт опубликованный релиз без существующего тега
 run(`git push origin ${tag}`);
 
+// Релиз создаём сами заранее: electron-builder шлёт два параллельных запроса на создание
+// и может завести два релиза с одним тегом. В существующий он просто догружает файлы.
+execFileSync(GH, ['release', 'create', tag, '--title', version, '--notes', notes || `Cropper ${version}`, '--verify-tag'], { cwd: root, stdio: 'inherit' });
+
 const token = execFileSync(GH, ['auth', 'token'], { encoding: 'utf8' }).trim();
 run('node scripts/copy-fonts.js');
 run('node scripts/make-icon.js');
 run('npx electron-builder --win nsis --publish always', { env: { ...process.env, GH_TOKEN: token } });
-
-if (notes) execFileSync(GH, ['release', 'edit', tag, '--notes', notes], { cwd: root, stdio: 'inherit' });
 console.log(`\nОпубликовано: https://github.com/kakasobaka9/cropper/releases/tag/${tag}`);
